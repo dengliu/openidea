@@ -6382,5 +6382,10 @@
   "Update source": "更新源",
   "Where updates are downloaded from. If it can't be reached, the other source is tried.": "从哪里下载更新。无法连接时会改用另一个源。",
   "CNB (China mirror)": "CNB（国内镜像）",
-  "Remote connection cancelled": "远程连接已取消"
+  "Remote connection cancelled": "远程连接已取消",
+  "IntelliJ Classic (macOS)": "IntelliJ 经典 (macOS)",
+  "IntelliJ Keymap": "IntelliJ 按键映射",
+  "Import Keymap": "导入按键映射",
+  "Invalid IntelliJ keymap XML": "无效的 IntelliJ 按键映射 XML",
+  "A keymap named '{name}' already exists.": "名为“{name}”的按键映射已存在。"
 }
