@@ -150,7 +150,7 @@
   "Run `auggie login` in a terminal.": "在终端中运行 `auggie login`。",
   "Run `claude` in a terminal and sign in.": "在终端中运行 `claude` 并登录。",
   "Run `codex login` in a terminal.": "在终端中运行 `codex login`。",
-  "Run `copilot` in a terminal and sign in.": "在终端中运行 `copilot` 并登录。",
+  "Sign in with GitHub when prompted, or run `copilot` in a terminal and sign in.": "按提示使用 GitHub 登录，或在终端中运行 `copilot` 并登录。",
   "Run `cursor-agent login` in a terminal.": "在终端中运行 `cursor-agent login`。",
   "Run `gemini` in a terminal and sign in.": "在终端中运行 `gemini` 并登录。",
   "Run `goose configure` in a terminal.": "在终端中运行 `goose configure`。",
