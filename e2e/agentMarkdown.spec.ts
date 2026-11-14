@@ -308,28 +308,34 @@ test("keeps chat history readable and selections free of timestamps and status l
   const geometry = await stream.evaluate((root) => {
     const reply = root.querySelector<HTMLElement>("[class*='_reply_']")!;
     const bubble = root.querySelector<HTMLElement>("[class*='_user_']")!;
-    const composer = root
-      .closest("[class*='_conversation_']")!
-      .querySelector<HTMLElement>("[class*='_composerArea_']")!;
+    const conversation = root.closest<HTMLElement>("[class*='_conversation_']")!;
+    const composer = conversation.querySelector<HTMLElement>("[class*='_composerArea_']")!;
+    const column = reply.closest<HTMLElement>("[class*='_agentMessage_']")!.getBoundingClientRect();
     const rr = reply.getBoundingClientRect();
     const br = bubble.getBoundingClientRect();
     const cr = composer.getBoundingClientRect();
+    const padding =
+      Number.parseFloat(getComputedStyle(root).paddingLeft) + Number.parseFloat(getComputedStyle(root).paddingRight);
     return {
       reply: rr.width,
       root: root.clientWidth,
+      padding,
+      columnWidth: column.width,
+      conversationWidth: conversation.clientWidth,
+      composerWidth: cr.width,
       bubbleLeft: br.left,
       replyLeft: rr.left,
       bubbleRight: br.right,
       replyRight: rr.right,
-      columnCenter: (() => {
-        const column = reply.closest("[class*='_agentMessage_']")!.getBoundingClientRect();
-        return (column.left + column.right) / 2;
-      })(),
+      columnCenter: (column.left + column.right) / 2,
       composerCenter: (cr.left + cr.right) / 2,
     };
   });
   expect(geometry.reply).toBeGreaterThan(0);
   expect(geometry.reply).toBeLessThan(geometry.root);
+  expect(geometry.conversationWidth).toBeGreaterThan(1000);
+  expect(Math.abs(geometry.columnWidth - (geometry.root - geometry.padding))).toBeLessThan(1);
+  expect(Math.abs(geometry.composerWidth - geometry.conversationWidth)).toBeLessThan(1);
   expect(geometry.bubbleLeft).toBeGreaterThan(geometry.replyLeft);
   expect(geometry.bubbleRight).toBeGreaterThan(geometry.replyRight);
   expect(Math.abs(geometry.columnCenter - geometry.composerCenter)).toBeLessThan(1);
