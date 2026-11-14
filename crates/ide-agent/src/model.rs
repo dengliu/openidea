@@ -120,6 +120,35 @@ pub struct AgentRetry {
     pub error: Option<String>,
 }
 
+/// Token pricing (Credits per 1M tokens) and context window capacity for one tier.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentTokenPricing {
+    pub input: f64,
+    pub output: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_read: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_write: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_tokens: Option<u32>,
+}
+
+/// Pricing and context-tier metadata attached to a model [`AgentConfigValue`].
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentModelPricing {
+    /// `"low"`, `"medium"`, or `"high"` (mapped from `lightweight` / `versatile` / `powerful`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_tier: Option<String>,
+    /// Legacy request-based billing multiplier (e.g. `1.0`, `0.33`, `3.0`), when applicable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub multiplier: Option<f64>,
+    /// Token pricing keyed by context tier (`"default"`, `"long_context"`).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub tiers: BTreeMap<String, AgentTokenPricing>,
+}
+
 /// One value of a select-type session setting.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
@@ -127,6 +156,8 @@ pub struct AgentConfigValue {
     pub value: String,
     pub name: String,
     pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pricing: Option<Box<AgentModelPricing>>,
 }
 
 /// How a setting is changed.

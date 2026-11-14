@@ -134,10 +134,10 @@ export const commands = {
 	/**  Routes frontend logs into the backend `tracing` pipeline. */
 	logFrontend: (level: LogLevel, message: string) => __TAURI_INVOKE<void>("log_frontend", { level, message }),
 	/**  Streams the project's agent events to this window; returns every task. */
-	agentSubscribe: (onEvent: Channel<AgentEvent>) => typedError<AgentTask[], IdeError>(__TAURI_INVOKE("agent_subscribe", { onEvent })),
-	agentProviders: () => typedError<AgentProvider[], IdeError>(__TAURI_INVOKE("agent_providers")),
+	agentSubscribe: (onEvent: Channel<AgentEvent_Deserialize>) => typedError<AgentTask_Serialize[], IdeError>(__TAURI_INVOKE("agent_subscribe", { onEvent })),
+	agentProviders: () => typedError<AgentProvider_Serialize[], IdeError>(__TAURI_INVOKE("agent_providers")),
 	/**  Refreshes the model catalog; force bypasses freshness, not the cooldown. */
-	agentRefreshModels: (provider: string, force: boolean) => typedError<AgentModelCatalog, IdeError>(__TAURI_INVOKE("agent_refresh_models", { provider, force })),
+	agentRefreshModels: (provider: string, force: boolean) => typedError<AgentModelCatalog_Serialize, IdeError>(__TAURI_INVOKE("agent_refresh_models", { provider, force })),
 	/**
 	 *  Overrides built-in agent `id`'s command with `command` (its agent file keeps the
 	 *  built-in's driver and arguments), or returns it to auto-detection with `None`.
@@ -186,11 +186,11 @@ export const commands = {
 	agentCommands: (provider: string, task: string | null) => typedError<AgentCommand[], IdeError>(__TAURI_INVOKE("agent_commands", { provider, task })),
 	/**  Entries of `task`'s conversation, or of its subagent `subagent`'s. */
 	agentEntries: (task: string, subagent: string | null) => typedError<AgentEntry[], IdeError>(__TAURI_INVOKE("agent_entries", { task, subagent })),
-	agentCreate: (request: NewAgentTask) => typedError<AgentTask, IdeError>(__TAURI_INVOKE("agent_create", { request })),
+	agentCreate: (request: NewAgentTask) => typedError<AgentTask_Serialize, IdeError>(__TAURI_INVOKE("agent_create", { request })),
 	/**  Sessions of the project on this machine that no task holds yet, newest first. */
 	agentExternalSessions: () => typedError<ExternalSession[], IdeError>(__TAURI_INVOKE("agent_external_sessions")),
 	/**  Imports an external session as a task: its first turn loads and replays it. */
-	agentImportSession: (provider: string, sessionId: string) => typedError<AgentTask, IdeError>(__TAURI_INVOKE("agent_import_session", { provider, sessionId })),
+	agentImportSession: (provider: string, sessionId: string) => typedError<AgentTask_Serialize, IdeError>(__TAURI_INVOKE("agent_import_session", { provider, sessionId })),
 	/**  Sends a message; while the agent works it is queued, or with `now` it interrupts the turn. */
 	agentPrompt: (task: string, prompt: AgentPrompt, now: boolean) => typedError<null, IdeError>(__TAURI_INVOKE("agent_prompt", { task, prompt, now })),
 	/**  Drops a queued message and returns it (to edit it). */
@@ -200,7 +200,7 @@ export const commands = {
 	/**  Changes a session setting (model, mode, thinking effort…). */
 	agentSetConfig: (task: string, option: string, value: string) => typedError<null, IdeError>(__TAURI_INVOKE("agent_set_config", { task, option, value })),
 	/**  Copies the task's conversation into a new task, up to its first `turns` turns (all when `None`). */
-	agentFork: (task: string, turns: number | null) => typedError<AgentTask, IdeError>(__TAURI_INVOKE("agent_fork", { task, turns })),
+	agentFork: (task: string, turns: number | null) => typedError<AgentTask_Serialize, IdeError>(__TAURI_INVOKE("agent_fork", { task, turns })),
 	/**  Drops the task's turns after its first `turns`; returns the message of the first dropped one. */
 	agentRollback: (task: string, turns: number) => typedError<{
 	text: string,
@@ -1939,22 +1939,49 @@ export type AgentConfigChoice = {
 };
 
 /**  A session setting: an ACP select config option, or the older `modes` / `models`. */
-export type AgentConfigOption = {
+export type AgentConfigOption = AgentConfigOption_Serialize | AgentConfigOption_Deserialize;
+
+/**  A session setting: an ACP select config option, or the older `modes` / `models`. */
+export type AgentConfigOption_Deserialize = {
 	id: string,
 	name: string,
 	description: string | null,
 	/**  ACP category: `model`, `mode`, `thought_level`, or agent-specific. */
 	category: string | null,
 	current: string | null,
-	values: AgentConfigValue[],
+	values: AgentConfigValue_Deserialize[],
+	via: AgentConfigVia,
+};
+
+/**  A session setting: an ACP select config option, or the older `modes` / `models`. */
+export type AgentConfigOption_Serialize = {
+	id: string,
+	name: string,
+	description: string | null,
+	/**  ACP category: `model`, `mode`, `thought_level`, or agent-specific. */
+	category: string | null,
+	current: string | null,
+	values: AgentConfigValue_Serialize[],
 	via: AgentConfigVia,
 };
 
 /**  One value of a select-type session setting. */
-export type AgentConfigValue = {
+export type AgentConfigValue = AgentConfigValue_Serialize | AgentConfigValue_Deserialize;
+
+/**  One value of a select-type session setting. */
+export type AgentConfigValue_Deserialize = {
 	value: string,
 	name: string,
 	description: string | null,
+	pricing?: AgentModelPricing_Deserialize | null,
+};
+
+/**  One value of a select-type session setting. */
+export type AgentConfigValue_Serialize = {
+	value: string,
+	name: string,
+	description: string | null,
+	pricing?: AgentModelPricing_Serialize | null,
 };
 
 /**  How a setting is changed. */
@@ -2020,24 +2047,47 @@ questions?: AgentQuestion[];
 chosen: string | null } | { type: "error"; message: string };
 
 /**  Streamed to the window that subscribed (`AgentManager::subscribe`). */
-export type AgentEvent = 
+export type AgentEvent = AgentEvent_Serialize | AgentEvent_Deserialize;
+
+/**  Streamed to the window that subscribed (`AgentManager::subscribe`). */
+export type AgentEvent_Deserialize = 
 /**  A task was created or its metadata changed. */
-{ type: "task"; task: AgentTask } | { type: "removed"; id: string } | 
+({ type: "task"; task: AgentTask_Deserialize }) & { catalog?: never; entry?: never; from?: never; id?: never; index?: never; length?: never; limits?: never; provider?: never; subagent?: never; text?: never } | ({ type: "removed"; id: string }) & { catalog?: never; entry?: never; from?: never; index?: never; length?: never; limits?: never; provider?: never; subagent?: never; task?: never; text?: never } | 
 /**  The task's conversation was cut to its first `length` entries (turns rolled back). */
-{ type: "truncated"; task: string; length: number } | 
+({ type: "truncated"; task: string; length: number }) & { catalog?: never; entry?: never; from?: never; id?: never; index?: never; limits?: never; provider?: never; subagent?: never; text?: never } | 
 /**  Entry `index` of `task` (of its subagent `subagent`) was added or replaced. */
-{ type: "entry"; task: string; subagent: string | null; index: number; entry: AgentEntry } | 
+({ type: "entry"; task: string; subagent: string | null; index: number; entry: AgentEntry }) & { catalog?: never; from?: never; id?: never; length?: never; limits?: never; provider?: never; text?: never } | 
 /**
  *  Text was appended to entry `index` (an agent message or a thought): it read the first
  *  `from` UTF-16 units of its text when the previous event for it was sent.
  */
-{ type: "append"; task: string; subagent: string | null; index: number; from: number; text: string } | 
+({ type: "append"; task: string; subagent: string | null; index: number; from: number; text: string }) & { catalog?: never; entry?: never; id?: never; length?: never; limits?: never; provider?: never } | 
 /**  An agent reported the usage limits of its account (shared by every task of `provider`). */
-{ type: "limits"; provider: string; limits: AgentLimit[] } | 
+({ type: "limits"; provider: string; limits: AgentLimit[] }) & { catalog?: never; entry?: never; from?: never; id?: never; index?: never; length?: never; subagent?: never; task?: never; text?: never } | 
 /**  A model lookup started or completed, including unsuccessful lookups. */
-{ type: "modelCatalog"; catalog: AgentModelCatalog } | 
+({ type: "modelCatalog"; catalog: AgentModelCatalog_Deserialize }) & { entry?: never; from?: never; id?: never; index?: never; length?: never; limits?: never; provider?: never; subagent?: never; task?: never; text?: never } | 
 /**  The installed or configured agent providers changed. */
-{ type: "providers" };
+({ type: "providers" }) & { catalog?: never; entry?: never; from?: never; id?: never; index?: never; length?: never; limits?: never; provider?: never; subagent?: never; task?: never; text?: never };
+
+/**  Streamed to the window that subscribed (`AgentManager::subscribe`). */
+export type AgentEvent_Serialize = 
+/**  A task was created or its metadata changed. */
+({ type: "task"; task: AgentTask_Serialize }) & { catalog?: never; entry?: never; from?: never; id?: never; index?: never; length?: never; limits?: never; provider?: never; subagent?: never; text?: never } | ({ type: "removed"; id: string }) & { catalog?: never; entry?: never; from?: never; index?: never; length?: never; limits?: never; provider?: never; subagent?: never; task?: never; text?: never } | 
+/**  The task's conversation was cut to its first `length` entries (turns rolled back). */
+({ type: "truncated"; task: string; length: number }) & { catalog?: never; entry?: never; from?: never; id?: never; index?: never; limits?: never; provider?: never; subagent?: never; text?: never } | 
+/**  Entry `index` of `task` (of its subagent `subagent`) was added or replaced. */
+({ type: "entry"; task: string; subagent: string | null; index: number; entry: AgentEntry }) & { catalog?: never; from?: never; id?: never; length?: never; limits?: never; provider?: never; text?: never } | 
+/**
+ *  Text was appended to entry `index` (an agent message or a thought): it read the first
+ *  `from` UTF-16 units of its text when the previous event for it was sent.
+ */
+({ type: "append"; task: string; subagent: string | null; index: number; from: number; text: string }) & { catalog?: never; entry?: never; id?: never; length?: never; limits?: never; provider?: never } | 
+/**  An agent reported the usage limits of its account (shared by every task of `provider`). */
+({ type: "limits"; provider: string; limits: AgentLimit[] }) & { catalog?: never; entry?: never; from?: never; id?: never; index?: never; length?: never; subagent?: never; task?: never; text?: never } | 
+/**  A model lookup started or completed, including unsuccessful lookups. */
+({ type: "modelCatalog"; catalog: AgentModelCatalog_Serialize }) & { entry?: never; from?: never; id?: never; index?: never; length?: never; limits?: never; provider?: never; subagent?: never; task?: never; text?: never } | 
+/**  The installed or configured agent providers changed. */
+({ type: "providers" }) & { catalog?: never; entry?: never; from?: never; id?: never; index?: never; length?: never; limits?: never; provider?: never; subagent?: never; task?: never; text?: never };
 
 export type AgentImage = {
 	mimeType: string,
@@ -2092,14 +2142,51 @@ export type AgentMcpServer_Serialize = {
 };
 
 /**  Authoritative choices for new tasks, independent of any running session's settings. */
-export type AgentModelCatalog = {
+export type AgentModelCatalog = AgentModelCatalog_Serialize | AgentModelCatalog_Deserialize;
+
+/**  Authoritative choices for new tasks, independent of any running session's settings. */
+export type AgentModelCatalog_Deserialize = {
 	provider: string,
-	config: AgentConfigOption[],
-	thoughtLevels: { [key in string]: AgentConfigOption[] },
+	config: AgentConfigOption_Deserialize[],
+	thoughtLevels: { [key in string]: AgentConfigOption_Deserialize[] },
 	refreshing: boolean,
 	refreshedAtMs: number | null,
 	retryAtMs: number | null,
 	error: string | null,
+};
+
+/**  Authoritative choices for new tasks, independent of any running session's settings. */
+export type AgentModelCatalog_Serialize = {
+	provider: string,
+	config: AgentConfigOption_Serialize[],
+	thoughtLevels: { [key in string]: AgentConfigOption_Serialize[] },
+	refreshing: boolean,
+	refreshedAtMs: number | null,
+	retryAtMs: number | null,
+	error: string | null,
+};
+
+/**  Pricing and context-tier metadata attached to a model [`AgentConfigValue`]. */
+export type AgentModelPricing = AgentModelPricing_Serialize | AgentModelPricing_Deserialize;
+
+/**  Pricing and context-tier metadata attached to a model [`AgentConfigValue`]. */
+export type AgentModelPricing_Deserialize = {
+	/**  `"low"`, `"medium"`, or `"high"` (mapped from `lightweight` / `versatile` / `powerful`). */
+	costTier?: string | null,
+	/**  Legacy request-based billing multiplier (e.g. `1.0`, `0.33`, `3.0`), when applicable. */
+	multiplier?: number | null,
+	/**  Token pricing keyed by context tier (`"default"`, `"long_context"`). */
+	tiers?: { [key in string]: AgentTokenPricing_Deserialize },
+};
+
+/**  Pricing and context-tier metadata attached to a model [`AgentConfigValue`]. */
+export type AgentModelPricing_Serialize = {
+	/**  `"low"`, `"medium"`, or `"high"` (mapped from `lightweight` / `versatile` / `powerful`). */
+	costTier?: string | null,
+	/**  Legacy request-based billing multiplier (e.g. `1.0`, `0.33`, `3.0`), when applicable. */
+	multiplier?: number | null,
+	/**  Token pricing keyed by context tier (`"default"`, `"long_context"`). */
+	tiers?: { [key in string]: AgentTokenPricing_Serialize },
 };
 
 export type AgentPermissionOption = {
@@ -2140,7 +2227,9 @@ export type AgentPrompt = {
 	images: AgentImage[],
 };
 
-export type AgentProvider = {
+export type AgentProvider = AgentProvider_Serialize | AgentProvider_Deserialize;
+
+export type AgentProvider_Deserialize = {
 	id: string,
 	name: string,
 	/**  The command line that starts its ACP server. */
@@ -2159,9 +2248,36 @@ export type AgentProvider = {
 	/**  Environment variables it starts with (from its agent file). */
 	env: { [key in string]: string },
 	/**  Settings (models, modes…) the agent offered last time it ran; empty before its first session. */
-	config: AgentConfigOption[],
+	config: AgentConfigOption_Deserialize[],
 	/**  Thinking-level options by model value; absent models have not reported their levels. */
-	thoughtLevels?: { [key in string]: AgentConfigOption[] },
+	thoughtLevels?: { [key in string]: AgentConfigOption_Deserialize[] },
+	/**  Slash commands it offered last time. */
+	commands: AgentCommand[],
+	source: AgentSource,
+};
+
+export type AgentProvider_Serialize = {
+	id: string,
+	name: string,
+	/**  The command line that starts its ACP server. */
+	command: string,
+	/**  Executable and arguments actually launched, without flattening paths containing spaces. */
+	program: string,
+	args: string[],
+	defaultProgram: string | null,
+	defaultArgs: string[],
+	loginHint: string | null,
+	commandOverridden: boolean,
+	commandEditable: boolean,
+	commandReadOnlyReason: AgentCommandReadOnlyReason | null,
+	/**  Whether the command was found (on `PATH`). */
+	installed: boolean,
+	/**  Environment variables it starts with (from its agent file). */
+	env: { [key in string]: string },
+	/**  Settings (models, modes…) the agent offered last time it ran; empty before its first session. */
+	config: AgentConfigOption_Serialize[],
+	/**  Thinking-level options by model value; absent models have not reported their levels. */
+	thoughtLevels: { [key in string]: AgentConfigOption_Serialize[] },
 	/**  Slash commands it offered last time. */
 	commands: AgentCommand[],
 	source: AgentSource,
@@ -2314,7 +2430,9 @@ export type AgentSubagentStatus = "running" |
 /**  One of its requests (a permission) waits for an answer. */
 "needsInput" | "done" | "cancelled" | "failed";
 
-export type AgentTask = {
+export type AgentTask = AgentTask_Serialize | AgentTask_Deserialize;
+
+export type AgentTask_Deserialize = {
 	/**  Original project folder; absent in tasks saved before per-task roots. */
 	projectRoot?: IpcPath | null,
 	id: string,
@@ -2341,7 +2459,7 @@ export type AgentTask = {
 	 *  The session's settings (model, mode, thinking effort…) as last reported, with the
 	 *  user's choices applied.
 	 */
-	config: AgentConfigOption[],
+	config: AgentConfigOption_Deserialize[],
 	/**  Slash commands the agent offers. */
 	commands: AgentCommand[],
 	/**  Context window use, when the agent reports it. */
@@ -2358,6 +2476,73 @@ export type AgentTask = {
 	retry?: AgentRetry | null,
 	/**  What the agent runs in the background (shells, subagents, monitors), oldest first. */
 	background?: AgentBackgroundTask[],
+};
+
+export type AgentTask_Serialize = {
+	/**  Original project folder; absent in tasks saved before per-task roots. */
+	projectRoot: IpcPath | null,
+	id: string,
+	title: string,
+	/**  [`AgentProvider::id`]. */
+	provider: string,
+	/**  Model the task runs on (its `model` setting), when known. */
+	model: string | null,
+	status: AgentStatus,
+	isolation: Isolation,
+	/**  Directory the agent works in (the worktree, or the project root). */
+	cwd: IpcPath,
+	/**  Branch of the task's worktree. */
+	branch: string | null,
+	/**  Branch (or revision) the worktree was created from. */
+	base: string | null,
+	/**  Commit the task's changes are compared against (worktree tasks; local ones use `HEAD`). */
+	baseCommit: string | null,
+	/**  Why the task failed, when it did. */
+	error: string | null,
+	createdMs: number | null,
+	updatedMs: number | null,
+	/**
+	 *  The session's settings (model, mode, thinking effort…) as last reported, with the
+	 *  user's choices applied.
+	 */
+	config: AgentConfigOption_Serialize[],
+	/**  Slash commands the agent offers. */
+	commands: AgentCommand[],
+	/**  Context window use, when the agent reports it. */
+	usage: AgentUsage | null,
+	/**  Messages waiting for the current turn to end, oldest first. */
+	queue: AgentQueued[],
+	capabilities: AgentCapabilities,
+	/**  When a [`AgentStatus::Limited`] task's limit resets (ms since the epoch), if the agent said. */
+	resetsMs: number | null,
+	/**
+	 *  The agent is retrying a failed API request (connection lost, overloaded…); cleared
+	 *  by its next output or any status change.
+	 */
+	retry: AgentRetry | null,
+	/**  What the agent runs in the background (shells, subagents, monitors), oldest first. */
+	background: AgentBackgroundTask[],
+};
+
+/**  Token pricing (Credits per 1M tokens) and context window capacity for one tier. */
+export type AgentTokenPricing = AgentTokenPricing_Serialize | AgentTokenPricing_Deserialize;
+
+/**  Token pricing (Credits per 1M tokens) and context window capacity for one tier. */
+export type AgentTokenPricing_Deserialize = {
+	input: number | null,
+	output: number | null,
+	cacheRead?: number | null,
+	cacheWrite?: number | null,
+	contextTokens?: number | null,
+};
+
+/**  Token pricing (Credits per 1M tokens) and context window capacity for one tier. */
+export type AgentTokenPricing_Serialize = {
+	input: number | null,
+	output: number | null,
+	cacheRead?: number | null,
+	cacheWrite?: number | null,
+	contextTokens?: number | null,
 };
 
 export type AgentToolDiff = {

@@ -187,7 +187,7 @@ impl Shared {
 
     fn config_for_new_task(&self, mut config: Vec<AgentConfigOption>, provider: &str) -> Vec<AgentConfigOption> {
         // Model-specific options are offered separately, never as provider-wide defaults.
-        config.retain(|o| o.category.as_deref() != Some("thought_level"));
+        config.retain(|o| !config::is_per_model_option(o));
         config::add_client_options(provider, &mut config);
         let hook = self.new_task_approvals.read().clone();
         if hook.is_some_and(|ask| ask() == ide_core::settings::NewTaskApprovals::Ask) {
@@ -232,8 +232,7 @@ impl Shared {
             && let Some(config) = config.filter(|c| !c.is_empty())
         {
             if let Some(model) = model {
-                let levels: Vec<_> =
-                    config.iter().filter(|o| o.category.as_deref() == Some("thought_level")).cloned().collect();
+                let levels: Vec<_> = config.iter().filter(|o| config::is_per_model_option(o)).cloned().collect();
                 if known.thought_levels.get(model) != Some(&levels) {
                     known.thought_levels.insert(model.to_owned(), levels);
                     changed = true;
@@ -374,13 +373,23 @@ impl AgentManager {
             }
             provider::Driver::Codex => native::codex::connect(spec, cwd, client, on_stderr),
             provider::Driver::Claude => native::claude::connect(spec, cwd, client, on_stderr),
+            provider::Driver::Copilot => native::copilot::connect(spec, cwd, client, on_stderr),
         });
         Self::with_connector(paths, runtime, connector)
     }
 
     fn with_connector(paths: AgentPaths, runtime: tokio::runtime::Handle, connector: Connector) -> Self {
         let known = paths.catalogs.store(&paths.models_file);
-        let providers = RwLock::new(provider::load(paths.custom_agents_dir.as_deref(), paths.env_secrets.as_deref()));
+        let loaded_providers = provider::load(paths.custom_agents_dir.as_deref(), paths.env_secrets.as_deref());
+        // Drop cached `copilot` entries captured by the older ACP driver (`session-modes#…`, no
+        // per-model pricing / context tiers) so native headless discovery populates all models.
+        if loaded_providers.iter().any(|p| p.id == "copilot" && p.driver == provider::Driver::Copilot) {
+            let mut guard = known.lock();
+            if guard.get("copilot").is_some_and(is_legacy_acp_copilot_cache) {
+                guard.remove("copilot");
+            }
+        }
+        let providers = RwLock::new(loaded_providers);
         let shared = Arc::new(Shared {
             paths,
             runtime,
@@ -929,12 +938,13 @@ impl AgentManager {
         {
             let mut s = task.state.lock();
             if !model_options {
-                s.task.config.retain(|o| o.category.as_deref() != Some("thought_level"));
+                s.task.config.retain(|o| !config::is_per_model_option(o));
             }
             if let Some(o) = s.task.config.iter_mut().find(|o| o.id == option) {
                 o.current = Some(value);
             }
             s.task.model = model_of(&s.task.config).or(s.task.model.take());
+            sync_usage_context_size(&mut s.task);
             let provider = s.task.provider.clone();
             let config = s.task.config.clone();
             let model = s.task.model.clone().filter(|_| model_options);
@@ -1922,10 +1932,10 @@ impl Task {
             (if known { reported } else { s.task.config.clone() }, s.wanted.clone())
         };
         config::add_client_options(&provider_id, &mut options);
-        // Changing model can replace the effort choices; validate those only afterwards.
-        wanted.sort_by_key(|c| match options.iter().find(|o| o.id == c.id).and_then(|o| o.category.as_deref()) {
-            Some("model") => 0,
-            Some("thought_level") => 2,
+        // Changing model can replace the effort and context-tier choices; validate those only afterwards.
+        wanted.sort_by_key(|c| match options.iter().find(|o| o.id == c.id) {
+            Some(o) if o.category.as_deref() == Some("model") => 0,
+            Some(o) if config::is_per_model_option(o) => 2,
             _ => 1,
         });
         let mut model_options = known;
@@ -1938,7 +1948,7 @@ impl Task {
                 }
                 continue;
             }
-            if o.category.as_deref() == Some("thought_level") && !model_options {
+            if config::is_per_model_option(&o) && !model_options {
                 continue;
             }
             let already = known && o.current.as_deref() == Some(choice.value.as_str());
@@ -1955,7 +1965,7 @@ impl Task {
                         model_options = true;
                     } else if o.category.as_deref() == Some("model") {
                         if o.current.as_deref() != Some(choice.value.as_str()) {
-                            options.retain(|o| o.category.as_deref() != Some("thought_level"));
+                            options.retain(|o| !config::is_per_model_option(o));
                         }
                         model_options = false;
                     }
@@ -2019,12 +2029,13 @@ impl Task {
                         if let Some(fresh) = reply.get("configOptions") {
                             config::merge_update(&mut s.task.config, fresh);
                         } else if option.category.as_deref() == Some("model") {
-                            s.task.config.retain(|o| o.category.as_deref() != Some("thought_level"));
+                            s.task.config.retain(|o| !config::is_per_model_option(o));
                         }
                         if let Some(o) = s.task.config.iter_mut().find(|o| o.id == option.id) {
                             o.current = Some(value);
                         }
                         s.task.model = model_of(&s.task.config).or(s.task.model.take());
+                        sync_usage_context_size(&mut s.task);
                         let model = s.task.model.clone().filter(|_| {
                             reply.get("configOptions").is_some() || option.category.as_deref() != Some("model")
                         });
@@ -2811,5 +2822,51 @@ fn entry_event(
             streamed.insert(subagent.clone(), Sent::new(i, text));
             AgentEvent::Entry { task: task.to_owned(), subagent, index: i as u32, entry: entry.clone() }
         }
+    }
+}
+
+/// Detects a cached `copilot` entry from the legacy ACP driver (`session-modes#…` URLs or
+/// no pricing metadata on any model), so startup replaces it via headless discovery.
+fn is_legacy_acp_copilot_cache(known: &Known) -> bool {
+    let url_mode = known.config.iter().any(|o| {
+        o.category.as_deref() == Some("mode")
+            && o.values.iter().any(|v| v.value.contains("agentclientprotocol.com/protocol/session-modes"))
+    });
+    if url_mode {
+        return true;
+    }
+    let has_pricing = known
+        .config
+        .iter()
+        .filter(|o| o.category.as_deref() == Some("model"))
+        .flat_map(|o| &o.values)
+        .any(|v| v.pricing.is_some());
+    !known.config.is_empty() && !has_pricing
+}
+
+/// Keeps `task.usage.size` aligned with the active model and `context_tier` when pricing
+/// metadata reports the selected tier's token limit.
+fn sync_usage_context_size(task: &mut AgentTask) {
+    let Some(usage) = task.usage.as_mut() else { return };
+    let Some(model_opt) = task.config.iter().find(|o| o.category.as_deref() == Some("model")) else { return };
+    let Some(model_id) = model_opt.current.as_deref() else { return };
+    let Some(pricing) = model_opt.values.iter().find(|v| v.value == model_id).and_then(|v| v.pricing.as_deref()) else {
+        return;
+    };
+    let tier = task
+        .config
+        .iter()
+        .find(|o| config::is_context_option(&o.id))
+        .and_then(|o| o.current.as_deref())
+        .unwrap_or("default");
+    if let Some(tokens) = pricing
+        .tiers
+        .get(tier)
+        .or_else(|| pricing.tiers.get("long_context"))
+        .or_else(|| pricing.tiers.get("default"))
+        .and_then(|t| t.context_tokens)
+        .filter(|&n| n > 0)
+    {
+        usage.size = tokens;
     }
 }

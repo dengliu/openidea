@@ -276,22 +276,111 @@ describe("model and effort button", () => {
     expect(within(dialog).getByRole("switch", { name: "Fast" })).toHaveAttribute("aria-checked", "false");
   });
 
-  it("steps through the advertised effort levels and picks a model from the popup", () => {
+  it("opens the per-model detail view with segmented Effort Level and switches models from the list", () => {
     const onChange = vi.fn();
     render(<ConfigPickers config={copilotConfig()} values={{ reasoning_effort: "high" }} onChange={onChange} />);
     fireEvent.click(screen.getByRole("button", { name: "Model" }));
     const dialog = screen.getByRole("dialog", { name: "Model & effort settings" });
-    const slider = within(dialog).getByRole("slider", { name: "Reasoning Effort" });
-    expect(slider).toHaveAttribute("max", "3");
-    expect(slider).toHaveValue("2");
-    expect(slider).toHaveAttribute("aria-valuetext", "high");
-    fireEvent.change(slider, { target: { value: "3" } });
+
+    // Open Page 2 (detail view) from the active model bar.
+    fireEvent.click(within(dialog).getByRole("button", { name: "Configure model" }));
+    const effortGroup = within(dialog).getByRole("radiogroup", { name: "Reasoning Effort" });
+    expect(within(effortGroup).getByRole("radio", { name: "high" })).toHaveAttribute("aria-checked", "true");
+    fireEvent.click(within(effortGroup).getByRole("radio", { name: "XHigh" }));
     expect(onChange).toHaveBeenLastCalledWith("reasoning_effort", "xhigh");
-    // The model list is in the popup itself, not behind a second dropdown.
-    expect(within(dialog).queryByRole("button", { name: "Model" })).not.toBeInTheDocument();
+
+    // Return to Page 1 (model list) and select another model.
+    fireEvent.click(within(dialog).getByRole("button", { name: "Back to models" }));
     fireEvent.click(within(dialog).getByRole("option", { name: /GPT-6 Sol/ }));
     expect(onChange).toHaveBeenLastCalledWith("model", "gpt-6-sol");
     expect(screen.getByRole("dialog", { name: "Model & effort settings" })).toBeInTheDocument();
+  });
+
+  it("configures Context Size (200K / 1M), Reset, Pin, and live Pricing details like VS Code Copilot", () => {
+    const onChange = vi.fn();
+    const geminiConfig = (effortVal = "high", contextVal = "long_context"): AgentConfigOption[] => [
+      {
+        id: "model",
+        name: "Model",
+        category: "model",
+        description: null,
+        current: "gemini-4-carbon",
+        via: "option",
+        values: [
+          {
+            value: "gemini-4-carbon",
+            name: "Gemini 4 Carbon",
+            description: "1x",
+            pricing: {
+              costTier: "medium",
+              multiplier: 1,
+              tiers: {
+                default: { input: 100, output: 500, cacheRead: 10, cacheWrite: 0, contextTokens: 200_000 },
+                long_context: { input: 200, output: 1000, cacheRead: 10, cacheWrite: 0, contextTokens: 1_000_000 },
+              },
+            },
+          },
+          value("gpt-6-sol", "GPT-6 Sol", "2x"),
+        ],
+      },
+      {
+        id: "reasoning_effort",
+        name: "Effort Level",
+        category: "thought_level",
+        description: null,
+        current: effortVal,
+        via: "option",
+        values: [value("low", "Low"), value("medium", "Medium"), value("high", "High")],
+      },
+      {
+        id: "context_tier",
+        name: "Context Size",
+        category: "model_config",
+        description: null,
+        current: contextVal,
+        via: "option",
+        values: [value("default", "200K"), value("long_context", "1M")],
+      },
+    ];
+
+    const { rerender } = render(<ConfigPickers config={geminiConfig("high", "long_context")} onChange={onChange} />);
+    const trigger = screen.getByRole("button", { name: "Model" });
+    expect(trigger).toHaveTextContent("Gemini 4 CarbonHigh · 1M");
+
+    fireEvent.click(trigger);
+    const dialog = screen.getByRole("dialog", { name: "Model & effort settings" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Configure Gemini 4 Carbon" }));
+
+    // Defaults (High + 1M) are active, so Reset is disabled.
+    expect(within(dialog).getByRole("button", { name: "Reset to defaults" })).toBeDisabled();
+    expect(within(dialog).getByText("Medium cost")).toBeVisible();
+    expect(within(dialog).getByText("Credits per 1M tokens")).toBeVisible();
+    expect(within(dialog).getByText("200")).toBeVisible();
+    expect(within(dialog).getByText("1000")).toBeVisible();
+
+    // Switch Context Size to 200K and Effort Level to Low.
+    const ctxGroup = within(dialog).getByRole("radiogroup", { name: "Context Size" });
+    fireEvent.click(within(ctxGroup).getByRole("radio", { name: "200K" }));
+    expect(onChange).toHaveBeenCalledWith("context_tier", "default");
+
+    rerender(<ConfigPickers config={geminiConfig("low", "default")} onChange={onChange} />);
+    // Pricing details dynamically reflect the 200K (`default`) tier rates, and Reset is enabled.
+    expect(within(dialog).getByText("100")).toBeVisible();
+    expect(within(dialog).getByText("500")).toBeVisible();
+    const resetBtn = within(dialog).getByRole("button", { name: "Reset to defaults" });
+    expect(resetBtn).not.toBeDisabled();
+    fireEvent.click(resetBtn);
+    expect(onChange).toHaveBeenCalledWith("reasoning_effort", "high");
+    expect(onChange).toHaveBeenCalledWith("context_tier", "long_context");
+
+    // Pin model and verify it surfaces under a Pinned section on Page 1.
+    fireEvent.click(within(dialog).getByRole("button", { name: "Pin model" }));
+    expect(within(dialog).getByRole("button", { name: "Unpin model" })).toHaveAttribute("aria-pressed", "true");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Back to models" }));
+    expect(within(within(dialog).getByRole("listbox", { name: "Model" })).getByText("Pinned")).toBeVisible();
+    // Clean up pin state for subsequent tests.
+    fireEvent.click(within(dialog).getByRole("button", { name: "Configure Gemini 4 Carbon" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Unpin model" }));
   });
 
   it("filters the model list and picks the highlighted model with the keyboard", () => {

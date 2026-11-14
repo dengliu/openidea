@@ -3,12 +3,69 @@
 
 use crate::model::{
     AgentCommand, AgentCommandSource, AgentConfigOption, AgentConfigValue, AgentConfigVia, AgentCost, AgentLimit,
-    AgentUsage,
+    AgentModelPricing, AgentUsage,
 };
 use serde_json::{Value, json};
 
 /// Cursor exposes execution modes over ACP, but leaves approval policy to its client.
 pub(crate) const CURSOR_APPROVAL: &str = "openidea.cursor.approval";
+/// Context window tier (`"default"` vs `"long_context"`).
+pub(crate) const CONTEXT_TIER: &str = "context_tier";
+
+/// Whether `option` belongs to the selected model rather than the provider as a whole
+/// (thinking effort levels and per-model context window tiers).
+pub(crate) fn is_per_model_option(option: &AgentConfigOption) -> bool {
+    option.category.as_deref() == Some("thought_level")
+        || matches!(option.id.as_str(), "effort" | "reasoning_effort" | "thinking" | "reasoning")
+        || is_context_option(&option.id)
+}
+
+pub(crate) fn is_context_option(id: &str) -> bool {
+    matches!(id, CONTEXT_TIER | "context_size" | "context")
+}
+
+/// Highest effort value offered in `values` (`none < minimal < low < medium < high < xhigh < max`).
+pub(crate) fn highest_effort_value(values: &[AgentConfigValue]) -> Option<&str> {
+    let rank = |v: &str| match v {
+        "none" => Some(0u8),
+        "minimal" => Some(1),
+        "low" => Some(2),
+        "medium" => Some(3),
+        "high" => Some(4),
+        "xhigh" | "extra_high" => Some(5),
+        "max" => Some(6),
+        _ => None,
+    };
+    let concrete: Vec<&AgentConfigValue> = values.iter().filter(|v| v.value != "default").collect();
+    if let Some(best) =
+        concrete.iter().filter_map(|v| rank(&v.value).map(|r| (r, v.value.as_str()))).max_by_key(|x| x.0)
+    {
+        return Some(best.1);
+    }
+    concrete.last().copied().or_else(|| values.last()).map(|v| v.value.as_str())
+}
+
+/// Maximum context-window value offered in `values` (`long_context` or largest token label).
+pub(crate) fn max_context_value(values: &[AgentConfigValue]) -> Option<&str> {
+    if let Some(v) = values.iter().find(|v| v.value == "long_context") {
+        return Some(v.value.as_str());
+    }
+    values
+        .iter()
+        .max_by_key(|v| parse_token_label(&v.name).or_else(|| parse_token_label(&v.value)).unwrap_or(0))
+        .map(|v| v.value.as_str())
+}
+
+fn parse_token_label(label: &str) -> Option<u64> {
+    let trimmed = label.trim().to_ascii_uppercase();
+    if let Some(num) = trimmed.strip_suffix('M') {
+        return num.trim().parse::<f64>().ok().map(|n| (n * 1_000_000.0) as u64);
+    }
+    if let Some(num) = trimmed.strip_suffix('K') {
+        return num.trim().parse::<f64>().ok().map(|n| (n * 1_000.0) as u64);
+    }
+    trimmed.parse::<u64>().ok()
+}
 
 pub(crate) fn add_client_options(provider: &str, config: &mut Vec<AgentConfigOption>) {
     if provider != "cursor" || config.iter().any(|o| o.id == CURSOR_APPROVAL) {
@@ -26,11 +83,13 @@ pub(crate) fn add_client_options(provider: &str, config: &mut Vec<AgentConfigOpt
                 value: "ask".into(),
                 name: "Ask for approval".into(),
                 description: Some("Show permission requests from Cursor".into()),
+                pricing: None,
             },
             AgentConfigValue {
                 value: "bypass".into(),
                 name: "Bypass approvals".into(),
                 description: Some("Automatically approve tool requests in this conversation".into()),
+                pricing: None,
             },
         ],
     });
@@ -143,7 +202,7 @@ pub(crate) fn parse_options(options: &Value) -> Vec<AgentConfigOption> {
                             matches!(id.as_str(), "effort" | "reasoning_effort" | "thinking" | "reasoning")
                                 .then(|| "thought_level".into())
                         })
-                        .or_else(|| matches!(id.as_str(), "fast").then(|| "model_config".into()))
+                        .or_else(|| (id == "fast" || is_context_option(&id)).then(|| "model_config".into()))
                 }),
                 current: str_of(o, "currentValue"),
                 values,
@@ -251,6 +310,7 @@ fn legacy(
             Some(AgentConfigValue {
                 name: str_of(m, "name").unwrap_or_else(|| value.clone()),
                 description: str_of(m, "description"),
+                pricing: pricing_of(m),
                 value,
             })
         })
@@ -271,8 +331,16 @@ fn value_of(v: &Value) -> Option<AgentConfigValue> {
     Some(AgentConfigValue {
         name: str_of(v, "name").unwrap_or_else(|| value.clone()),
         description: str_of(v, "description"),
+        pricing: pricing_of(v),
         value,
     })
+}
+
+fn pricing_of(v: &Value) -> Option<Box<AgentModelPricing>> {
+    v.pointer("/_meta/pricing")
+        .or_else(|| v.get("pricing"))
+        .and_then(|p| serde_json::from_value(p.clone()).ok())
+        .map(Box::new)
 }
 
 fn str_of(v: &Value, key: &str) -> Option<String> {
@@ -407,12 +475,20 @@ mod tests {
                 {"id": "effort", "type": "select", "currentValue": "high",
                  "options": [{"value": "low"}, {"value": "high"}]},
                 {"id": "fast", "type": "select", "currentValue": "false",
-                 "options": [{"value": "false", "name": "Off"}, {"value": "true", "name": "On"}]}
+                 "options": [{"value": "false", "name": "Off"}, {"value": "true", "name": "On"}]},
+                {"id": "context_tier", "type": "select", "currentValue": "long_context",
+                 "options": [{"value": "default", "name": "200K"}, {"value": "long_context", "name": "1M"}]}
             ]
         }));
-        assert_eq!(c.len(), 2);
+        assert_eq!(c.len(), 3);
         assert_eq!(c[0].category.as_deref(), Some("thought_level"));
+        assert!(is_per_model_option(&c[0]));
         assert_eq!(c[1].category.as_deref(), Some("model_config"));
+        assert!(!is_per_model_option(&c[1]));
+        assert_eq!(c[2].category.as_deref(), Some("model_config"));
+        assert!(is_per_model_option(&c[2]));
+        assert_eq!(highest_effort_value(&c[0].values), Some("high"));
+        assert_eq!(max_context_value(&c[2].values), Some("long_context"));
     }
 
     #[test]

@@ -349,12 +349,75 @@ export function atEdgeLine(text: string, caret: number, dir: -1 | 1): boolean {
   return dir < 0 ? !text.slice(0, caret).includes("\n") : !text.slice(caret).includes("\n");
 }
 
-const matchesCategory = (o: AgentConfigOption, category: string) =>
-  o.category === category || (category === "model_config" && (o.category === "model_config" || o.id === "fast"));
+export const isContextOption = (id: string) => id === "context_tier" || id === "context_size" || id === "context";
 
-/** Cursor / ACP model parameters (`fast`, `context`…), separate from the model id itself. */
+export const isPerModelOption = (o: AgentConfigOption) => o.category === "thought_level" || isContextOption(o.id);
+
+const EFFORT_RANKS: Record<string, number> = {
+  none: 0,
+  minimal: 1,
+  low: 2,
+  medium: 3,
+  high: 4,
+  xhigh: 5,
+  extra_high: 5,
+  max: 6,
+};
+
+/** Highest effort value offered in `option` (`none < minimal < low < medium < high < xhigh < max`). */
+export function highestEffortValue(option: AgentConfigOption): string | null {
+  const concrete = option.values.filter((v) => v.value !== "default");
+  let best: { rank: number; value: string } | null = null;
+  for (const v of concrete) {
+    const rank = EFFORT_RANKS[v.value];
+    if (rank !== undefined && (!best || rank >= best.rank)) {
+      best = { rank, value: v.value };
+    }
+  }
+  return best?.value ?? concrete.at(-1)?.value ?? option.values.at(-1)?.value ?? null;
+}
+
+function parseTokenLabel(label: string): number {
+  const trimmed = label.trim().toUpperCase();
+  if (trimmed.endsWith("M")) {
+    const n = Number(trimmed.slice(0, -1));
+    return Number.isFinite(n) ? n * 1_000_000 : 0;
+  }
+  if (trimmed.endsWith("K")) {
+    const n = Number(trimmed.slice(0, -1));
+    return Number.isFinite(n) ? n * 1_000 : 0;
+  }
+  const n = Number(trimmed);
+  return Number.isFinite(n) ? n : 0;
+}
+
+/** Maximum context-window value offered in `option` (`long_context` or largest token label). */
+export function maxContextValue(option: AgentConfigOption): string | null {
+  const longCtx = option.values.find((v) => v.value === "long_context");
+  if (longCtx) return longCtx.value;
+  let best: { tokens: number; value: string } | null = null;
+  for (const v of option.values) {
+    const tokens = parseTokenLabel(v.name) || parseTokenLabel(v.value);
+    if (!best || tokens >= best.tokens) best = { tokens, value: v.value };
+  }
+  return best?.value ?? null;
+}
+
+/** Formats a per-1M-token credit rate cleanly (`200`, `1000`, `0`, `12.5`). */
+export function formatCreditRate(rate: number | null | undefined): string {
+  if (rate == null || !Number.isFinite(rate)) return "0";
+  if (rate === 0) return "0";
+  if (rate < 0.01) return rate.toExponential(2);
+  return Number(rate.toFixed(4)).toString();
+}
+
+const matchesCategory = (o: AgentConfigOption, category: string) =>
+  o.category === category ||
+  (category === "model_config" && (o.category === "model_config" || o.id === "fast" || isContextOption(o.id)));
+
+/** Cursor / Copilot / ACP model parameters (`fast`, `context_tier`…), separate from the model id itself. */
 export function modelConfigOptions(config: readonly AgentConfigOption[]): AgentConfigOption[] {
-  return config.filter((o) => o.category === "model_config" || o.id === "fast");
+  return config.filter((o) => o.category === "model_config" || o.id === "fast" || isContextOption(o.id));
 }
 
 /** The settings shown in the composer: model, mode, collaboration mode, permissions, approvals, effort, fast. */
@@ -375,6 +438,22 @@ export function cursorModelDefaults(
   const fast = config.find((o) => o.id === "fast" || o.category === "model_config");
   if (fast?.values.some((v) => v.value === "false")) return { [fast.id]: "false" };
   return {};
+}
+
+/** Copilot defaults to maximum context window (`1M`) and highest supported effort level. */
+export function copilotModelDefaults(
+  providerId: string | undefined,
+  config: readonly AgentConfigOption[],
+): Record<string, string> {
+  if (providerId !== "copilot" && !providerId?.startsWith("copilot-")) return {};
+  const out: Record<string, string> = {};
+  const effort = config.find((o) => o.category === "thought_level" && o.values.length > 0);
+  const maxEffort = effort ? highestEffortValue(effort) : null;
+  if (effort && maxEffort) out[effort.id] = maxEffort;
+  const ctx = config.find((o) => isContextOption(o.id) && o.values.length > 0);
+  const maxCtx = ctx ? maxContextValue(ctx) : null;
+  if (ctx && maxCtx) out[ctx.id] = maxCtx;
+  return out;
 }
 
 export const modeOption = (config: readonly AgentConfigOption[]) => config.find((o) => o.category === "mode");

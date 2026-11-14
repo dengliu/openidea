@@ -44,7 +44,7 @@ pub(crate) async fn run(shared: &Arc<Shared>, spec: &ProviderSpec) -> Result<Dis
         let mut options = config::options_of(&new);
         config::add_client_options(&launch.id, &mut options);
         let model_option = options.iter().find(|o| o.category.as_deref() == Some("model"));
-        let effort = levels_for_model_from_slice(&options);
+        let effort = levels_for_model_from_slice(&launch.id, &options);
         let levels: Vec<(String, Vec<AgentConfigOption>)> = match (model_option, effort) {
             (Some(model), Some(effort)) if !model.values.is_empty() => {
                 model.values.iter().map(|v| (v.value.clone(), effort.clone())).collect()
@@ -89,19 +89,27 @@ impl ide_jsonrpc::Handler for DiscoveryUpdates {
     }
 }
 
-fn is_thought_level(o: &AgentConfigOption) -> bool {
-    o.category.as_deref() == Some("thought_level")
-        || matches!(o.id.as_str(), "effort" | "reasoning_effort" | "thinking" | "reasoning")
-}
-
-fn levels_for_model_from_slice(options: &[AgentConfigOption]) -> Option<Vec<AgentConfigOption>> {
+fn levels_for_model_from_slice(provider: &str, options: &[AgentConfigOption]) -> Option<Vec<AgentConfigOption>> {
+    let maximize = provider == "copilot" || provider.starts_with("copilot-");
     let levels: Vec<_> = options
         .iter()
-        .filter(|o| is_thought_level(o))
+        .filter(|o| config::is_per_model_option(o))
         .cloned()
         .map(|mut o| {
-            if o.category.as_deref() != Some("thought_level") {
-                o.category = Some("thought_level".into());
+            if config::is_context_option(&o.id) {
+                if o.category.as_deref() != Some("model_config") {
+                    o.category = Some("model_config".into());
+                }
+                if maximize && let Some(best) = config::max_context_value(&o.values).map(str::to_owned) {
+                    o.current = Some(best);
+                }
+            } else {
+                if o.category.as_deref() != Some("thought_level") {
+                    o.category = Some("thought_level".into());
+                }
+                if maximize && let Some(best) = config::highest_effort_value(&o.values).map(str::to_owned) {
+                    o.current = Some(best);
+                }
             }
             o
         })

@@ -99,6 +99,7 @@ impl LaunchContext {
                 provider::Driver::Acp => b"acp",
                 provider::Driver::Codex => b"codex",
                 provider::Driver::Claude => b"claude",
+                provider::Driver::Copilot => b"copilot",
             },
         );
         field(&mut hash, self.spec.command.as_bytes());
@@ -416,6 +417,28 @@ async fn discover(shared: &Arc<Shared>, spec: provider::ProviderSpec) -> Result<
                             .map(|o| config::options_of(&serde_json::json!({ "configOptions": [o] })))
                             .unwrap_or_default();
                         (model, levels)
+                    })
+                    .collect(),
+            })
+        }
+        provider::Driver::Copilot => {
+            let found = native::copilot::discover(spec.clone(), shared.paths.project_root.clone()).await?;
+            Ok(Discovered {
+                commands: Some(config::commands_of(
+                    &serde_json::json!({ "availableCommands": found.commands }),
+                    &spec.id,
+                )),
+                config: config::options_of(&serde_json::json!({ "configOptions": found.options })),
+                levels: found
+                    .per_model
+                    .into_iter()
+                    .map(|(model, opts)| {
+                        let parsed = if opts.is_empty() {
+                            Vec::new()
+                        } else {
+                            config::options_of(&serde_json::json!({ "configOptions": opts }))
+                        };
+                        (model, parsed)
                     })
                     .collect(),
             })

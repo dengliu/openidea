@@ -29,9 +29,11 @@ import { confirm, showError } from "@/workbench/messages";
 import {
   bypassDefaults,
   canSend,
+  copilotModelDefaults,
   cursorModelDefaults,
   emptyDraft,
   isMentioned,
+  isPerModelOption,
   toPrompt,
   type ComposerDraft,
   type FileRef,
@@ -123,12 +125,14 @@ interface AgentsState {
   sessionLocation: SessionLocation;
   lastTask: string | null;
   homeOpen: boolean;
+  pinnedModels: string[];
 }
 
 const DRAFT_KEY = "openidea.agents.draft.v2";
 const HISTORY_KEY = "openidea.agents.history.v1";
 const HISTORY_SIZE = 50;
 const SESSION_LOCATION_KEY = "openidea.agents.sessionLocation.v1";
+const PINNED_MODELS_KEY = "openidea.agents.pinnedModels.v1";
 
 function load<T>(key: string, fallback: T): T {
   try {
@@ -191,8 +195,16 @@ export const useAgents = create<AgentsState>(() => ({
   sessionLocation: load<unknown>(SESSION_LOCATION_KEY, null) === "toolWindow" ? "toolWindow" : "editor",
   lastTask: null,
   homeOpen: false,
+  pinnedModels: load<string[]>(PINNED_MODELS_KEY, []),
   scrollPositions: new Map(),
 }));
+
+export function togglePinnedModel(modelValue: string) {
+  const current = useAgents.getState().pinnedModels;
+  const next = current.includes(modelValue) ? current.filter((m) => m !== modelValue) : [...current, modelValue];
+  useAgents.setState({ pinnedModels: next });
+  save(PINNED_MODELS_KEY, next);
+}
 
 export function updateDraft(patch: Partial<Draft>) {
   const current = useAgents.getState().draft;
@@ -227,7 +239,7 @@ export function draftConfig(
       ? [...offered, { ...priorModel, values: [] }]
       : offered;
   const config = source
-    .filter((o) => o.category !== "thought_level")
+    .filter((o) => !isPerModelOption(o))
     .map((o) => {
       const explicit = draft.config[o.id];
       const choice = explicit ?? defaults[o.id];
@@ -243,9 +255,11 @@ export function draftConfig(
     });
   const model = config.find((o) => o.category === "model")?.current;
   if (model) {
+    const modelOpts = (catalog ?? provider)?.thoughtLevels?.[model] ?? [];
+    const autoDefaults = copilotModelDefaults(provider?.id, modelOpts);
     config.push(
-      ...((catalog ?? provider)?.thoughtLevels?.[model] ?? []).map((o) => {
-        const choice = draft.thoughtLevels?.[model]?.[o.id] ?? defaults[o.id];
+      ...modelOpts.map((o) => {
+        const choice = draft.thoughtLevels?.[model]?.[o.id] ?? defaults[o.id] ?? autoDefaults[o.id];
         return {
           ...o,
           current: choice !== undefined && o.values.some((v) => v.value === choice) ? choice : o.current,
@@ -263,7 +277,8 @@ export function setDraftOption(id: string, value: string) {
     draft,
   );
   const model = config.find((o) => o.category === "model")?.current;
-  if (model && config.find((o) => o.id === id)?.category === "thought_level") {
+  const target = config.find((o) => o.id === id);
+  if (model && target && isPerModelOption(target)) {
     updateDraft({
       thoughtLevels: {
         ...draft.thoughtLevels,
@@ -928,14 +943,13 @@ export async function startTask(
   const askForApprovals = useProject.getState().settings?.agents?.newTaskApprovals === "ask";
   const defaults = {
     ...cursorModelDefaults(draft.provider, options),
+    ...copilotModelDefaults(draft.provider, options),
     ...(askForApprovals ? {} : bypassDefaults(options)),
     ...providerDefaults(draft.provider),
   };
   const config = options.flatMap((o) => {
     const value =
-      o.category === "model" || o.category === "thought_level"
-        ? o.current
-        : (draft.config[o.id] ?? defaults[o.id] ?? null);
+      o.category === "model" || isPerModelOption(o) ? o.current : (draft.config[o.id] ?? defaults[o.id] ?? null);
     return value !== null && o.values.some((v) => v.value === value) ? [{ id: o.id, value }] : [];
   });
   try {
